@@ -1,0 +1,130 @@
+SSH@CORE_SW#show version
+Copyright (c) Ruckus Networks, Inc. All rights reserved.
+    UNIT 1: compiled on Feb 10 2024 at 12:00:00 labeled as SPS09010h
+      (34000000 bytes) from Primary SPS09010h.bin (UFI)
+        SW: Version 09.0.10hT233
+      Compiled on Feb 10 2024 at 12:00:00 by builder
+    HW: ICX7850-48F
+==========================================================================
+UNIT 1: SL 1: ICX7850-48F-STK 48-port Management Module
+      Serial  #:CYT1234A001
+      Software Package: ICX7850_L3_SOFT_PACKAGE
+      Current License: L3PREM
+==========================================================================
+UNIT 2: SL 1: ICX7850-48F-STK 48-port Management Module
+      Serial  #:CYT1234A002
+      Software Package: ICX7850_L3_SOFT_PACKAGE
+      Current License: L3PREM
+==========================================================================
+  1000 MHz ARMv8 Cortex-A72 processor
+  8192 MB DRAM
+  4096 KB boot flash
+  2048 MB code flash
+The system uptime for STACKID 1 is 45 days 3 hour 12 minute 8 second
+The system started at 05:58:12 GMT+00 Sat May 27 2026
+The system : started=warm start reloaded=by "reload"
+My stack unit ID = 1, bootup role = active
+
+SSH@CORE_SW#show flash
+Stack unit 1:
+  Compressed Pri Code size = 34000000, Version:09.0.10hT233 (SPS09010h.bin)
+  Compressed Sec Code size = 34000000, Version:09.0.10hT233 (SPS09010h.bin)
+  Boot Image size = 1000000, Version:10.1.18T233
+Stack unit 2:
+  Compressed Pri Code size = 34000000, Version:09.0.10hT233 (SPS09010h.bin)
+  Compressed Sec Code size = 34000000, Version:09.0.10hT233 (SPS09010h.bin)
+  Boot Image size = 1000000, Version:10.1.18T233
+
+SSH@CORE_SW#show vlan brief
+Total Number of Vlan Configured :6
+VLANs Configured :1 10 20 to 22 501
+
+SSH@CORE_SW#show stack neighbors
+U#  Stack-port1              Stack-port2
+1  1/2/1 (none)              1/2/5 to U2 (2/2/1)
+2  2/2/1 to U1 (1/2/5)       2/2/5 (none)
+
+SSH@CORE_SW#show running-config
+!
+hostname CORE_SW
+!
+vlan 1 name DEFAULT-VLAN by port
+!
+vlan 10 name USERS by port
+ tagged ethe 1/1/1 to 1/1/10
+!
+vlan 20 name SERVERS by port
+ tagged ethe 1/1/11 to 1/1/20
+!
+vlan 21 name RET_OLD_A by port
+!
+vlan 22 name RET_OLD_B by port
+!
+vlan 501 name RADIO_VOTIN by port
+!
+lag CORE-UPLINK dynamic id 1
+ ports ethe 1/1/47 ethe 1/1/48
+ port-name UPLINK-1 ethernet 1/1/47
+!
+interface ethernet 1/1/1
+ port-name ESXi-HOST-01
+ no spanning-tree
+!
+router ospf
+ area 0
+!
+router bgp
+ local-as 65010
+ neighbor 10.0.30.3 description SPINE-1
+ neighbor 10.0.30.4 description SPINE-2
+!
+
+SSH@CORE_SW#show ip bgp neighbors
+   1   IP Address: 10.0.30.3, AS: 65001
+       Description: SPINE-1
+       State: ESTABLISHED, Time: 45d3h12m
+   2   IP Address: 10.0.30.4, AS: 65001
+       Description: SPINE-2
+       State: CONNECT, Time: 0h0m
+
+SSH@CORE_SW#show ip vrrp-extended brief
+Total number of VRRP-Extended routers defined: 2
+Intf   VRID  Prio  P State    Master addr  Backup addr  VIP           Init-Flag
+v10    10    100   P Master   Local        Unknown      10.10.10.254  Disabled
+v501   501   100   P Init     Local        Unknown      10.50.1.254   Disabled
+
+SSH@CORE_SW#show logging
+Jul 11 10:23:45:W:SYSTEM: Duplicate IP address 10.30.240.254 detected, sent from MAC address 0000.1111.2222 on interface eth 1/1/10
+Jul 11 09:01:02:N:SYSTEM: Interface ethernet 1/1/1, state up
+Jul 10 22:14:30:I:OSPF: Nbr 10.0.30.3 on interface v10 changed state to FULL
+
+SSH@CORE_SW#show chassis
+Power supply 1 (AC - Normal) present, status ok
+        Model Number:  RPS21-E
+        Serial Number: PS1234A001
+        Firmware Ver:  1.2
+Power supply 2 (AC - Normal) present, status ok
+        Model Number:  RPS21-E
+        Serial Number: PS1234A002
+        Firmware Ver:  1.2
+Fan 1 ok
+Fan 2 ok
+Fan 3 ok
+Fan controlled temperature: 34.5 deg-C
+        Warning level.......: 59 deg-C
+        Shutdown level......: 62 deg-C
+Slot 1 Current Temperature: 34.5 deg-C (Sensor 1)  36.0 deg-C (Sensor 2)
+Boot Prom MAC : 00e0.1234.5678
+Management MAC: 00e0.1234.5679
+
+SSH@CORE_SW#show memory
+Dynamic memory: 1073741824 bytes total, 805306368 bytes free, 25% used
+
+SSH@CORE_SW#show cpu
+1 sec avg: 5 percent busy
+5 sec avg: 8 percent busy
+60 sec avg: 7 percent busy
+300 sec avg: 6 percent busy
+
+SSH@CORE_SW#show manager log
+Jul 11 10:00:00 Registered with SmartZone controller 10.0.0.5 successfully
