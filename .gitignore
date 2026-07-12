@@ -1,0 +1,6 @@
+# Local Azure OpenAI credentials for server.py (never commit real keys)
+.env
+
+# Python
+__pycache__/
+*.pyc
