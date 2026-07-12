@@ -2528,7 +2528,8 @@ async function generateAISummary() {
   btn.disabled = true;
 
   const cfg = getAOAIConfig();
-  const hasAOAI = cfg.endpoint && cfg.key && cfg.deployment;
+  const be = await aiBackendStatus();
+  const hasAOAI = be.available || (cfg.endpoint && cfg.key && cfg.deployment);
 
   const prompt = `You are a senior Ruckus TAC network engineer analyzing an ICX switch show-tech output.
 
@@ -2550,32 +2551,17 @@ Write a professional TAC executive summary with these sections:
 
 Be specific and technical. Under 450 words. Use **bold** for section headers.`;
 
-  // ---- Try Azure OpenAI first ----
+  // ---- Try Azure OpenAI first (secure backend proxy, else browser-configured endpoint) ----
   if (hasAOAI) {
+    const aiLabel = be.available ? ((be.deployment || 'gpt') + ' · secure proxy') : cfg.deployment;
     area.innerHTML = `<div class="ai-loading"><div class="spinner"></div>
-      <span>Calling Azure OpenAI (<code style="font-size:10px;">${cfg.deployment}</code>)…</span></div>`;
+      <span>Calling Azure OpenAI (<code style="font-size:10px;">${aiLabel}</code>)…</span></div>`;
     try {
-      const url = `${cfg.endpoint.replace(/\/$/, '')}/openai/deployments/${cfg.deployment}/chat/completions?api-version=${cfg.version}`;
-      const resp = await Promise.race([
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'api-key': cfg.key },
-          body: JSON.stringify({
-            messages: [
-              { role: 'system', content: 'You are a senior network engineer writing concise TAC case summaries.' },
-              { role: 'user', content: prompt }
-            ],
-            max_tokens: 1000, temperature: 0.4
-          })
-        }),
-        new Promise((_,rej) => setTimeout(()=>rej(new Error('timeout')), 15000))
-      ]);
-      if (!resp.ok) {
-        const err = await resp.json().catch(()=>({error:{message:resp.statusText}}));
-        throw new Error(`Azure OpenAI ${resp.status}: ${err?.error?.message}`);
-      }
-      const data = await resp.json();
-      const text = data.choices?.[0]?.message?.content || '';
+      const res = await aiChatCompletion([
+        { role: 'system', content: 'You are a senior network engineer writing concise TAC case summaries.' },
+        { role: 'user', content: prompt }
+      ], { max_tokens: 1000, temperature: 0.4 });
+      const text = res.text;
       if (!text) throw new Error('Empty response from Azure OpenAI');
 
       let html2 = text
@@ -2585,7 +2571,7 @@ Be specific and technical. Under 450 words. Use **bold** for section headers.`;
 
       area.innerHTML = `<div class="ai-content">${html2}</div>
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);font-family:var(--mono);font-size:10px;color:var(--faint);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <span style="background:rgba(129,140,248,0.15);border:1px solid rgba(129,140,248,0.3);padding:3px 8px;border-radius:6px;color:var(--info);">🤖 Azure OpenAI · ${cfg.deployment}</span>
+          <span style="background:rgba(129,140,248,0.15);border:1px solid rgba(129,140,248,0.3);padding:3px 8px;border-radius:6px;color:var(--info);">🤖 Azure OpenAI · ${res.deployment || aiLabel}</span>
           <span>${new Date().toLocaleString()} · Ready to paste into SFDC case</span>
         </div>`;
       return;
@@ -3023,17 +3009,26 @@ function getAOAIConfig() {
 async function testAOAIConnection() {
   const cfg=getAOAIConfig();
   const btn=document.querySelector('.aoai-test-btn');
-  if(!cfg.endpoint||!cfg.key||!cfg.deployment){
-    alert('Please fill in Endpoint, API Key, and Deployment Name first.'); return;
+  const be=await aiBackendStatus();
+  const useBackend = be.available && !(cfg.endpoint && cfg.key && cfg.deployment);
+  if(!useBackend && (!cfg.endpoint||!cfg.key||!cfg.deployment)){
+    alert('Please fill in Endpoint, API Key, and Deployment Name first — or run the backend proxy (see AZURE_OPENAI_INTEGRATION.md).'); return;
   }
   btn.textContent='⏳ Testing…'; btn.disabled=true;
   try {
-    const url=`${cfg.endpoint.replace(/\/$/,'')}/openai/deployments/${cfg.deployment}/chat/completions?api-version=${cfg.version}`;
-    const resp=await fetch(url,{method:'POST',
-      headers:{'Content-Type':'application/json','api-key':cfg.key},
-      body:JSON.stringify({messages:[{role:'user',content:'Reply with just: OK'}],max_tokens:5})});
+    let resp;
+    if (useBackend) {
+      resp=await fetch('/api/ai/chat',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({messages:[{role:'user',content:'Reply with just: OK'}],max_tokens:5,temperature:0})});
+    } else {
+      const url=`${cfg.endpoint.replace(/\/$/,'')}/openai/deployments/${cfg.deployment}/chat/completions?api-version=${cfg.version}`;
+      resp=await fetch(url,{method:'POST',
+        headers:{'Content-Type':'application/json','api-key':cfg.key},
+        body:JSON.stringify({messages:[{role:'user',content:'Reply with just: OK'}],max_tokens:5})});
+    }
     if(resp.ok){
-      btn.textContent='✅ Connected!'; btn.style.color='var(--ok)'; btn.style.borderColor='var(--ok)';
+      btn.textContent = useBackend ? '✅ Backend OK!' : '✅ Connected!'; btn.style.color='var(--ok)'; btn.style.borderColor='var(--ok)';
     } else {
       const err=await resp.json().catch(()=>({error:{message:resp.statusText}}));
       btn.textContent=`❌ Error ${resp.status}`; btn.style.color='var(--crit)'; btn.style.borderColor='var(--crit)';
@@ -3748,38 +3743,26 @@ async function askTroubleshoot() {
   const ctx = buildDeviceContext();
   const systemPrompt = 'You are a senior Ruckus TAC engineer with deep expertise in ICX switches, SmartZone, VXLAN/EVPN, BGP, OSPF, VRRP-Extended, and Layer 2/3 troubleshooting. Answer the engineer question with: 1) Root Cause Analysis (2-3 sentences). 2) Step-by-Step Troubleshooting (numbered CLI commands and what to look for). 3) Recommended Fix (specific config changes). 4) KB / Documentation References marked [KB]. 5) Escalation criteria. Be specific to THIS device using the context provided. Keep under 500 words. Use markdown.';
   const userPrompt = '**Device Context:**\n' + ctx + '\n\n**Question:** ' + q;
-  if (cfg.endpoint && cfg.key && cfg.deployment) {
-    try {
-      const url = cfg.endpoint.replace(/\/$/, '') + '/openai/deployments/' + cfg.deployment + '/chat/completions?api-version=' + cfg.version;
-      const resp = await Promise.race([
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'api-key': cfg.key },
-          body: JSON.stringify({
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt }
-            ],
-            max_tokens: 1200, temperature: 0.3
-          })
-        }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000))
-      ]);
-      if (!resp.ok) throw new Error('Azure OpenAI ' + resp.status);
-      const data = await resp.json();
-      const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-      contentEl.innerHTML = markdownToHTML(text);
-      sourceEl.innerHTML = '<span style="background:rgba(129,140,248,0.15);border:1px solid rgba(129,140,248,0.3);padding:3px 8px;border-radius:6px;color:var(--info);">🤖 Azure OpenAI · ' + cfg.deployment + '</span>';
-      citEl.innerHTML = buildCopilotHandoffLinks(q);
-      return;
-    } catch (e) {
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt }
+  ];
+  try {
+    const res = await aiChatCompletion(messages, { max_tokens: 1200, temperature: 0.3 });
+    if (!res.text) throw new Error('empty response');
+    contentEl.innerHTML = markdownToHTML(res.text);
+    sourceEl.innerHTML = '<span style="background:rgba(129,140,248,0.15);border:1px solid rgba(129,140,248,0.3);padding:3px 8px;border-radius:6px;color:var(--info);">🤖 Azure OpenAI · ' + (res.deployment || 'gpt') + (res.source === 'backend' ? ' · secure proxy' : '') + '</span>';
+    citEl.innerHTML = buildCopilotHandoffLinks(q);
+    return;
+  } catch (e) {
+    if (e && e.notConfigured) {
+      contentEl.innerHTML = '<p style="color:var(--dim);">Azure OpenAI is not configured on this dashboard. Use one of the buttons below to open your question in a Copilot experience:</p><ul><li><strong>M365 Copilot</strong> - internal Ruckus KB, SharePoint docs, past TAC cases.</li><li><strong>Bing Copilot</strong> - public web references and vendor documentation.</li></ul>';
+    } else {
       contentEl.innerHTML = '<div style="color:var(--warn);padding:12px;background:var(--warn-dim);border-radius:8px;">⚠️ Azure OpenAI unavailable (' + e.message + '). Use the M365 Copilot / Bing Copilot buttons below for the same query.</div>';
-      citEl.innerHTML = buildCopilotHandoffLinks(q);
-      return;
     }
+    citEl.innerHTML = buildCopilotHandoffLinks(q);
+    return;
   }
-  contentEl.innerHTML = '<p style="color:var(--dim);">Azure OpenAI is not configured on this dashboard. Use one of the buttons below to open your question in a Copilot experience:</p><ul><li><strong>M365 Copilot</strong> - internal Ruckus KB, SharePoint docs, past TAC cases.</li><li><strong>Bing Copilot</strong> - public web references and vendor documentation.</li></ul>';
-  citEl.innerHTML = buildCopilotHandoffLinks(q);
 }
 function askTroubleshootForIndex(idx) {
   const f = findings[idx];
@@ -3849,4 +3832,99 @@ document.querySelectorAll('.nav-tab').forEach(function(tab){
     }
   });
 });
+</script>
+<script>
+// ================================================================
+//  Azure OpenAI integration (behavioral only - no UI/layout change)
+//  Prefers a same-origin secure backend proxy (server.py -> /api/ai/*)
+//  that keeps the Azure OpenAI key server-side and avoids browser CORS.
+//  Falls back to the browser-entered "Azure OpenAI Configuration" card
+//  when no backend is present, then to the local generator.
+// ================================================================
+window.__aiBackend = { available: false, deployment: '', apiVersion: '', checked: false };
+
+async function aiBackendStatus() {
+  if (window.__aiBackend.checked) return window.__aiBackend;
+  try {
+    const r = await fetch('/api/ai/status', { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      window.__aiBackend = {
+        available: !!j.configured,
+        deployment: j.deployment || '',
+        apiVersion: j.apiVersion || '',
+        checked: true
+      };
+    } else {
+      window.__aiBackend.checked = true;
+    }
+  } catch (e) {
+    window.__aiBackend.checked = true;   // no backend (e.g. file:// or plain static host)
+  }
+  return window.__aiBackend;
+}
+
+// Unified chat-completion call used by the AI Troubleshoot and Executive
+// Summary features. Returns { text, source, deployment }.
+async function aiChatCompletion(messages, opts) {
+  opts = opts || {};
+  const maxTokens = opts.max_tokens || 1200;
+  const temperature = (opts.temperature != null) ? opts.temperature : 0.3;
+  const be = await aiBackendStatus();
+
+  // 1) Secure same-origin backend proxy (recommended).
+  if (be.available) {
+    const resp = await Promise.race([
+      fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: messages, max_tokens: maxTokens, temperature: temperature })
+      }),
+      new Promise(function (_, rej) { setTimeout(function () { rej(new Error('timeout')); }, 30000); })
+    ]);
+    if (!resp.ok) {
+      let msg = 'backend ' + resp.status;
+      try { const e = await resp.json(); if (e && e.error) msg = (typeof e.error === 'string') ? e.error : JSON.stringify(e.error); } catch (_) {}
+      throw new Error(msg);
+    }
+    const data = await resp.json();
+    return {
+      text: (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '',
+      source: 'backend',
+      deployment: be.deployment
+    };
+  }
+
+  // 2) Fallback: direct browser call using the Azure OpenAI Configuration card.
+  const cfg = getAOAIConfig();
+  if (cfg.endpoint && cfg.key && cfg.deployment) {
+    const url = cfg.endpoint.replace(/\/$/, '') + '/openai/deployments/' + cfg.deployment + '/chat/completions?api-version=' + cfg.version;
+    const resp = await Promise.race([
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'api-key': cfg.key },
+        body: JSON.stringify({ messages: messages, max_tokens: maxTokens, temperature: temperature })
+      }),
+      new Promise(function (_, rej) { setTimeout(function () { rej(new Error('timeout')); }, 30000); })
+    ]);
+    if (!resp.ok) {
+      let msg = 'Azure OpenAI ' + resp.status;
+      try { const e = await resp.json(); if (e && e.error && e.error.message) msg += ': ' + e.error.message; } catch (_) {}
+      throw new Error(msg);
+    }
+    const data = await resp.json();
+    return {
+      text: (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '',
+      source: 'direct',
+      deployment: cfg.deployment
+    };
+  }
+
+  const err = new Error('not-configured');
+  err.notConfigured = true;
+  throw err;
+}
+
+// Probe backend availability on load (non-blocking).
+aiBackendStatus();
 </script>
