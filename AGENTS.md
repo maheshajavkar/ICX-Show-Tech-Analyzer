@@ -31,5 +31,20 @@ python3 -m http.server 8000
 - **CDN dependence:** the topology graph (Cytoscape.js) and web fonts load from CDNs. Core
   parsing/findings work offline; the graph/fonts degrade without internet.
 
+### Optional Azure OpenAI backend proxy (`server.py`)
+`server.py` (Python stdlib only, no pip installs) is an optional way to run the app.
+It serves the HTML **and** proxies AI calls to Azure OpenAI so the API key stays
+server-side (avoids browser CORS + key exposure). Configure via env vars
+(`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`,
+`AZURE_OPENAI_API_VERSION`, `PORT`) then `python3 server.py` → `http://localhost:8000/`.
+Endpoints: `GET /api/ai/status`, `POST /api/ai/chat`. Full details in
+`docs/AZURE_OPENAI_INTEGRATION.md`.
+
+- The page auto-detects the backend via `GET /api/ai/status`; if absent it falls
+  back to the browser-entered *Azure OpenAI Configuration* card, then to a local
+  summary generator. So the app still runs fine under plain `python3 -m http.server`.
+- To test the proxy without a paid Azure resource, point `AZURE_OPENAI_ENDPOINT` at
+  any HTTP endpoint returning an Azure-shaped `{"choices":[{"message":{"content":...}}]}`.
+
 ### Lint / test / build
 None exist. Do not add build/test infrastructure unless explicitly requested.
